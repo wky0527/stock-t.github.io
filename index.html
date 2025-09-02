@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>智能做T成本计算器（动态补回股价）</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body style="font-family:Arial; margin:20px;">
+<h2>智能做T成本计算器（动态补回股价）</h2>
+
+<label>持仓股数: <input id="holdShares" type="number" value="2300"></label><br><br>
+<label>成本价(元): <input id="costPrice" type="number" step="0.001" value="18.137"></label><br><br>
+
+<h3>今日卖出记录（可多条）</h3>
+<div id="sellRecords">
+    <div>
+        卖出股数: <input class="sellShares" type="number" value="500">
+        卖出价: <input class="sellPrice" type="number" step="0.001" value="15.09">
+    </div>
+    <div>
+        卖出股数: <input class="sellShares" type="number" value="500">
+        卖出价: <input class="sellPrice" type="number" step="0.001" value="15.10">
+    </div>
+</div>
+<button onclick="addSellRow()">增加卖出记录</button><br><br>
+
+<label>目标差价(元/股): <input id="targetDiff" type="number" step="0.01" value="0.5"></label><br><br>
+
+<h3>手续费设置</h3>
+<label>佣金率(万分之): <input id="commissionRate" type="number" step="0.01" value="2.3"></label><br>
+<label>印花税率(万分之, 卖出收): <input id="stampRate" type="number" step="0.01" value="5"></label><br>
+<label>最低佣金(元): <input id="minCommission" type="number" step="0.1" value="5"></label><br><br>
+
+<h3>剩余持仓股数（用于补回计算）: <input id="remainingShares" type="number" value="1300"></h3>
+
+<button onclick="calculate()">计算成本变化</button>
+<button onclick="resetChart()">重置图表</button>
+
+<h3>结果：</h3>
+<div id="result" style="white-space:pre-line; font-size:16px; color:#333;"></div>
+
+<h3>成本变化图：</h3>
+<canvas id="costChart" width="700" height="350"></canvas>
+
+<script>
+    let costHistory = [];
+    let chart;
+
+    function initChart(initialCost){
+        const ctx = document.getElementById('costChart').getContext('2d');
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ["初始成本"],
+                datasets: [{
+                    label: '持仓成本变化',
+                    data: [initialCost],
+                    borderColor: 'blue',
+                    backgroundColor: 'lightblue',
+                    fill: false,
+                    tension: 0.1
+                }]
+            },
+            options:{ responsive:false, scales:{ y:{ beginAtZero:false } } }
+        });
+        costHistory = [initialCost];
+    }
+
+    function addSellRow(){
+        const div = document.createElement("div");
+        div.innerHTML = '卖出股数: <input class="sellShares" type="number" value="0">  卖出价: <input class="sellPrice" type="number" step="0.001" value="0">';
+        document.getElementById("sellRecords").appendChild(div);
+    }
+
+    // 手续费计算
+    function calcFee(amount, isSell, commissionRate, stampRate, minCommission){
+        let fee = amount * commissionRate / 10000;
+        if(fee < minCommission) fee = minCommission;
+        if(isSell) fee += amount * stampRate / 10000;
+        return fee;
+    }
+
+    function calculate(){
+        let holdShares = parseFloat(document.getElementById("holdShares").value);
+        let costPrice = parseFloat(document.getElementById("costPrice").value);
+        let targetDiff = parseFloat(document.getElementById("targetDiff").value);
+        let commissionRate = parseFloat(document.getElementById("commissionRate").value);
+        let stampRate = parseFloat(document.getElementById("stampRate").value);
+        let minCommission = parseFloat(document.getElementById("minCommission").value);
+        let remainingShares = parseFloat(document.getElementById("remainingShares").value);
+
+        // 卖出记录
+        let sellSharesInputs = document.querySelectorAll(".sellShares");
+        let sellPriceInputs = document.querySelectorAll(".sellPrice");
+        let totalSellNet = 0;
+        let totalSellShares = 0;
+        let resultText = "";
+
+        for(let i=0;i<sellSharesInputs.length;i++){
+            let s = parseFloat(sellSharesInputs[i].value);
+            let p = parseFloat(sellPriceInputs[i].value);
+            if(s<=0) continue;
+            let amount = s*p;
+            let fee = calcFee(amount,true,commissionRate,stampRate,minCommission);
+            let net = amount - fee;
+            totalSellNet += net;
+            totalSellShares += s;
+
+            resultText += `卖出${s}股, 卖出价${p}, 手续费${fee.toFixed(2)}, 卖出净额${net.toFixed(2)}\n`;
+        }
+
+        if(totalSellShares === 0){
+            alert("请填写有效卖出记录！");
+            return;
+        }
+
+        // 自动计算下一步买入价格和股数
+        let buyPrice = 0;
+        let count = 0;
+        for(let i=0;i<sellPriceInputs.length;i++){
+            let p = parseFloat(sellPriceInputs[i].value);
+            let s = parseFloat(sellSharesInputs[i].value);
+            if(s>0){
+                buyPrice += p - targetDiff;
+                count++;
+            }
+        }
+        buyPrice = buyPrice / count;
+
+        let buyShares = totalSellShares;
+        let buyAmount = buyShares*buyPrice;
+        let buyFee = calcFee(buyAmount,false,commissionRate,0,minCommission);
+        let buyNet = buyAmount + buyFee;
+
+        resultText += `\n建议买入${buyShares}股, 买入价约${buyPrice.toFixed(2)}, 手续费${buyFee.toFixed(2)}, 买入净支出${buyNet.toFixed(2)}\n`;
+
+        let netProfit = totalSellNet - buyNet;
+
+        // 新成本价
+        let newCost = (costPrice*holdShares - netProfit)/holdShares;
+        let floating = (buyPrice - newCost)*holdShares;
+
+        resultText += `\n本次净收益: ${netProfit.toFixed(2)} 元\n新的持仓成本: ${newCost.toFixed(3)} 元\n当前浮亏/浮盈: ${floating.toFixed(2)} 元`;
+
+        // 🔹动态计算剩余持仓补回股价
+        if(remainingShares>0){
+            let requiredPrice = (netProfit/remainingShares) + costPrice;
+            resultText += `\n如果不买回，剩余${remainingShares}股需要股价涨到约${requiredPrice.toFixed(2)}元才能弥补今日卖出差价`;
+        }
+
+        document.getElementById("result").innerText = resultText;
+
+        // 更新图表
+        costHistory.push(newCost);
+        chart.data.labels.push("买回后");
+        chart.data.datasets[0].data.push(newCost);
+        chart.update();
+
+        document.getElementById("costPrice").value = newCost.toFixed(3);
+    }
+
+    function resetChart(){
+        let initCost = parseFloat(document.getElementById("costPrice").value);
+        chart.destroy();
+        initChart(initCost);
+    }
+
+    window.onload = function(){
+        let initCost = parseFloat(document.getElementById("costPrice").value);
+        initChart(initCost);
+    }
+</script>
+</body>
+</html>
