@@ -2,14 +2,15 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <title>智能做T成本计算器（动态补回股价）</title>
+    <title>智能做T成本计算器（含默认做T建议）</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body style="font-family:Arial; margin:20px;">
-<h2>智能做T成本计算器（动态补回股价）</h2>
+<h2>智能做T成本计算器（含默认做T建议）</h2>
 
 <label>持仓股数: <input id="holdShares" type="number" value="2300"></label><br><br>
 <label>成本价(元): <input id="costPrice" type="number" step="0.001" value="18.137"></label><br><br>
+<label>当前股价(元): <input id="currentPrice" type="number" step="0.001" value="15.640"></label><br><br>
 
 <h3>今日卖出记录（可多条）</h3>
 <div id="sellRecords">
@@ -34,6 +35,7 @@
 <h3>剩余持仓股数（用于补回计算）: <input id="remainingShares" type="number" value="1300"></h3>
 
 <button onclick="calculate()">计算成本变化</button>
+<button onclick="autoT()">默认智能做T</button>
 <button onclick="resetChart()">重置图表</button>
 
 <h3>结果：</h3>
@@ -80,6 +82,7 @@
         return fee;
     }
 
+    // 计算做T收益
     function calculate(){
         let holdShares = parseFloat(document.getElementById("holdShares").value);
         let costPrice = parseFloat(document.getElementById("costPrice").value);
@@ -89,7 +92,6 @@
         let minCommission = parseFloat(document.getElementById("minCommission").value);
         let remainingShares = parseFloat(document.getElementById("remainingShares").value);
 
-        // 卖出记录
         let sellSharesInputs = document.querySelectorAll(".sellShares");
         let sellPriceInputs = document.querySelectorAll(".sellPrice");
         let totalSellNet = 0;
@@ -114,19 +116,17 @@
             return;
         }
 
-        // 自动计算下一步买入价格和股数
+        // 自动计算买入价
         let buyPrice = 0;
         let count = 0;
         for(let i=0;i<sellPriceInputs.length;i++){
-            let p = parseFloat(sellPriceInputs[i].value);
             let s = parseFloat(sellSharesInputs[i].value);
             if(s>0){
-                buyPrice += p - targetDiff;
+                buyPrice += parseFloat(sellPriceInputs[i].value) - targetDiff;
                 count++;
             }
         }
         buyPrice = buyPrice / count;
-
         let buyShares = totalSellShares;
         let buyAmount = buyShares*buyPrice;
         let buyFee = calcFee(buyAmount,false,commissionRate,0,minCommission);
@@ -135,14 +135,11 @@
         resultText += `\n建议买入${buyShares}股, 买入价约${buyPrice.toFixed(2)}, 手续费${buyFee.toFixed(2)}, 买入净支出${buyNet.toFixed(2)}\n`;
 
         let netProfit = totalSellNet - buyNet;
-
-        // 新成本价
         let newCost = (costPrice*holdShares - netProfit)/holdShares;
         let floating = (buyPrice - newCost)*holdShares;
 
         resultText += `\n本次净收益: ${netProfit.toFixed(2)} 元\n新的持仓成本: ${newCost.toFixed(3)} 元\n当前浮亏/浮盈: ${floating.toFixed(2)} 元`;
 
-        // 🔹动态计算剩余持仓补回股价
         if(remainingShares>0){
             let requiredPrice = (netProfit/remainingShares) + costPrice;
             resultText += `\n如果不买回，剩余${remainingShares}股需要股价涨到约${requiredPrice.toFixed(2)}元才能弥补今日卖出差价`;
@@ -150,13 +147,33 @@
 
         document.getElementById("result").innerText = resultText;
 
-        // 更新图表
         costHistory.push(newCost);
         chart.data.labels.push("买回后");
         chart.data.datasets[0].data.push(newCost);
         chart.update();
 
         document.getElementById("costPrice").value = newCost.toFixed(3);
+    }
+
+    // 🔹默认智能做T
+    function autoT(){
+        let holdShares = parseFloat(document.getElementById("holdShares").value);
+        let currentPrice = parseFloat(document.getElementById("currentPrice").value);
+        let targetDiff = parseFloat(document.getElementById("targetDiff").value);
+
+        // 默认卖出不超过50%持仓
+        let sellShares = Math.floor(holdShares * 0.5);
+        let sellPrice = currentPrice + targetDiff/2;
+        let buyPrice = sellPrice - targetDiff;
+
+        // 填入卖出记录
+        const sellRecords = document.getElementById("sellRecords");
+        sellRecords.innerHTML = "";
+        const div = document.createElement("div");
+        div.innerHTML = `卖出股数: <input class="sellShares" type="number" value="${sellShares}">  卖出价: <input class="sellPrice" type="number" step="0.001" value="${sellPrice.toFixed(3)}">`;
+        sellRecords.appendChild(div);
+
+        calculate();
     }
 
     function resetChart(){
