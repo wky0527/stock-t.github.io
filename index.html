@@ -1,141 +1,308 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>智能自动做T计算器</title>
+    <title>A股做T计算器（整数股最终版）</title>
     <style>
-        body { font-family: Arial; margin: 20px; }
-        button { margin: 5px; padding: 6px 12px; }
-        #result { white-space: pre-line; font-size: 16px; margin-top: 20px; }
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        label { display: block; margin-top: 10px; }
+        input { padding: 5px; margin-top: 5px; width: 200px; }
+        button { margin-top: 15px; padding: 8px 15px; }
+        table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+        table, th, td { border: 1px solid #aaa; }
+        th, td { padding: 8px; text-align: center; }
+        h2 { margin-top: 30px; }
+        .green { background-color: #d4f4dd; }
+        .red { background-color: #f4d4d4; }
+        input[type=range] { width: 300px; margin-top: 5px; }
+        #tFeasibility { font-weight: bold; margin-top: 10px; }
+        #smartTip { font-weight: bold; margin-top: 5px; display:block;}
+        #bestRangeTip { margin-left:10px; color:blue; font-weight:bold;}
     </style>
 </head>
 <body>
-<h2>智能自动做T计算器（支持正向/反向/略高/补仓/自定义）</h2>
 
-<label>持仓股数: <input id="holdShares" type="number" value="2300"></label><br><br>
-<label>成本价(元): <input id="costPrice" type="number" step="0.001" value="18.137"></label><br><br>
-<label>当前股价(元): <input id="currentPrice" type="number" step="0.001" value="15.640"></label><br><br>
-<label>目标差价(元/股): <input id="targetDiff" type="number" step="0.01" value="0.5"></label><br><br>
+<h1>A股做T计算器（整数股最终版）</h1>
 
-<h3>操作模式：</h3>
-<button onclick="calcForwardT()">正向做T</button>
-<button onclick="calcReverseT()">反向做T</button>
-<button onclick="calcReverseHigher()">略高买回模式</button>
-<button onclick="calc补仓()">补仓计算</button>
-<button onclick="calcCustom()">自定义模式</button>
+<!-- 基础输入 -->
+<label>持仓股数: <input type="number" id="holdShares" value="2300" step="100" oninput="updateAll()"></label>
+<label>持仓成本价(元): <input type="number" step="0.01" id="costPrice" value="18.137" oninput="updateAll()"></label>
+<label>当前股价(元): <input type="number" step="0.01" id="currentPrice" value="15.640" oninput="updateAll()"></label>
+<div id="tFeasibility"></div>
 
-<h3>结果：</h3>
-<div id="result"></div>
+<!-- 自定义股数做T -->
+<h2>自定义股数做T（滑动条 + 自动优化买回价）</h2>
+<label>卖出股数: <span id="sellSharesLabel">500</span>
+    <input type="range" id="smartSellShares" min="100" max="2300" value="500" step="100" oninput="updateSmartBuyPrice()">
+    <span id="bestRangeTip"></span>
+</label>
+<label>卖出价格(元): <span id="sellPriceLabel">15.100</span>
+    <input type="range" id="smartSellPrice" min="0" max="50" step="0.01" value="15.100" oninput="updateSmartBuyPrice()">
+</label>
+<label>买回价格(元): <input type="number" step="0.001" id="smartBuyPrice" value="" oninput="updateSmartTProfit()"></label>
+<label id="smartTip"></label>
+<button onclick="calcSmartT()">计算自定义股数做T</button>
+
+<!-- 自定义比例做T -->
+<h2>自定义比例做T</h2>
+<label>卖出比例（%）: <input type="number" id="customPercent" value="20"></label>
+<label>卖出价格(元): <input type="number" step="0.01" id="percentSellPrice" value="15.100"></label>
+<label>买回价格(元): <input type="number" step="0.01" id="percentBuyPrice" value="14.800"></label>
+<button onclick="calcPercentT()">计算自定义比例做T</button>
+
+<!-- 自动最优模式 -->
+<h2>自动最优模式</h2>
+<button onclick="calcAutoT()">自动最优做T（默认30%仓位，±0.3元差价）</button>
+<button onclick="calcMaxProfitT()">一键最大化净收益做T</button>
+
+<!-- 结果对比表 -->
+<h2>结果对比</h2>
+<table>
+    <thead>
+    <tr>
+        <th>模式</th>
+        <th>卖出股数</th>
+        <th>卖出价格</th>
+        <th>卖出净额</th>
+        <th>买回股数</th>
+        <th>买回价格</th>
+        <th>买回总额</th>
+        <th>新成本价</th>
+        <th>净收益</th>
+        <th>补仓回本价</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr id="rowAuto"><td>自动最优做T</td><td colspan="9">等待计算</td></tr>
+    <tr id="rowCustom"><td>自定义股数做T</td><td colspan="9">等待计算</td></tr>
+    <tr id="rowPercent"><td>自定义比例做T</td><td colspan="9">等待计算</td></tr>
+    <tr id="rowMaxProfit"><td>最大净收益做T</td><td colspan="9">等待计算</td></tr>
+    </tbody>
+</table>
 
 <script>
-    // 手续费率
-    const feeRate = 0.00023;   // 万2.3
-    const taxRate = 0.0005;    // 万5（仅卖出收）
+    const feeRate = 0.00023;
+    const taxRate = 0.0005;
 
-    // 计算手续费
-    function calcFee(amount, isSell){
-        let fee = amount * feeRate;
-        if(isSell) fee += amount * taxRate;
-        return fee < 5 ? 5 : fee; // 最低5元
+    function toIntegerShares(shares){
+        return Math.floor(shares/100)*100; //取整到100股
     }
 
-    // 正向做T：先买后卖
-    function calcForwardT(){
-        let holdShares = +document.getElementById("holdShares").value;
-        let costPrice = +document.getElementById("costPrice").value;
-        let currentPrice = +document.getElementById("currentPrice").value;
-        let diff = +document.getElementById("targetDiff").value;
+    function doT(sellShares, sellPrice, buyPrice, holdShares, costPrice){
+        sellShares = toIntegerShares(sellShares);
+        const sellAmount = sellShares * sellPrice;
+        const sellFee = sellAmount * feeRate;
+        const sellTax = sellAmount * taxRate;
+        const sellNet = sellAmount - sellFee - sellTax;
 
-        let buyPrice = currentPrice - diff/2;
-        let sellPrice = buyPrice + diff;
-        let buyShares = Math.floor(holdShares*0.2); // 默认买20%
+        const buyAmount = sellShares * buyPrice;
+        const buyFee = buyAmount * feeRate;
+        const buyTotal = buyAmount + buyFee;
 
-        let buyCost = buyPrice*buyShares + calcFee(buyPrice*buyShares,false);
-        let sellIncome = sellPrice*buyShares - calcFee(sellPrice*buyShares,true);
-        let profit = sellIncome - buyCost;
+        const totalCostBefore = holdShares * costPrice;
+        const totalCostAfter = totalCostBefore - sellNet + buyTotal;
+        const newCostPrice = totalCostAfter / holdShares;
 
-        let newCost = (costPrice*holdShares - profit) / holdShares;
+        const profit = sellNet - buyTotal;
+        const breakEvenPrice = totalCostAfter / holdShares;
 
-        document.getElementById("result").innerText =
-            `【正向做T】\n买入股数: ${buyShares} 股 @${buyPrice.toFixed(2)} 元\n卖出股数: ${buyShares} 股 @${sellPrice.toFixed(2)} 元\n本次净收益: ${profit.toFixed(2)} 元\n新成本价: ${newCost.toFixed(3)} 元\n提示: 若股价到 ${sellPrice.toFixed(2)} 元即可完成正向T`;
+        return { sellShares, sellPrice, sellNet, buyShares: sellShares, buyPrice, buyTotal, newCostPrice, profit, breakEvenPrice };
     }
 
-    // 反向做T：先卖后买
-    function calcReverseT(){
-        let holdShares = +document.getElementById("holdShares").value;
-        let costPrice = +document.getElementById("costPrice").value;
-        let currentPrice = +document.getElementById("currentPrice").value;
-        let diff = +document.getElementById("targetDiff").value;
+    function calcAutoT(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        const currentPrice = +document.getElementById("currentPrice").value;
 
-        let sellPrice = currentPrice + diff/2;
-        let buyPrice = sellPrice - diff;
-        let sellShares = Math.floor(holdShares*0.2); // 默认卖20%
+        let sellShares = toIntegerShares(Math.floor(holdShares * 0.3));
+        const sellPrice = currentPrice + 0.15;
+        const buyPrice = currentPrice - 0.15;
 
-        let sellIncome = sellPrice*sellShares - calcFee(sellPrice*sellShares,true);
-        let buyCost = buyPrice*sellShares + calcFee(buyPrice*sellShares,false);
-        let profit = sellIncome - buyCost;
-
-        let newCost = (costPrice*holdShares - profit) / holdShares;
-
-        document.getElementById("result").innerText =
-            `【反向做T】\n卖出股数: ${sellShares} 股 @${sellPrice.toFixed(2)} 元\n买回股数: ${sellShares} 股 @${buyPrice.toFixed(2)} 元\n本次净收益: ${profit.toFixed(2)} 元\n新成本价: ${newCost.toFixed(3)} 元\n提示: 若股价回落至 ${buyPrice.toFixed(2)} 元即可完成反向T`;
+        const res = doT(sellShares, sellPrice, buyPrice, holdShares, costPrice);
+        updateTable("rowAuto", res);
     }
 
-    // 略高买回模式
-    function calcReverseHigher(){
-        let holdShares = +document.getElementById("holdShares").value;
-        let costPrice = +document.getElementById("costPrice").value;
-        let currentPrice = +document.getElementById("currentPrice").value;
-        let sellShares = Math.floor(holdShares*0.2);
+    function checkTFeasibility(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        const currentPrice = +document.getElementById("currentPrice").value;
 
-        let sellPrice = currentPrice;
-        let buyPrice = sellPrice * 1.01; // 略高 1%
+        let sellShares = toIntegerShares(Math.floor(holdShares * 0.3));
+        const sellPrice = currentPrice;
+        const buyPrice = currentPrice - 0.3;
 
-        let sellIncome = sellPrice*sellShares - calcFee(sellPrice*sellShares,true);
-        let buyCost = buyPrice*sellShares + calcFee(buyPrice*sellShares,false);
-        let profit = sellIncome - buyCost;
+        const sellAmount = sellShares * sellPrice;
+        const sellFee = sellAmount * feeRate;
+        const sellTax = sellAmount * taxRate;
+        const sellNet = sellAmount - sellFee - sellTax;
 
-        let newCost = (costPrice*holdShares - profit) / holdShares;
+        const buyAmount = sellShares * buyPrice;
+        const buyFee = buyAmount * feeRate;
+        const buyTotal = buyAmount + buyFee;
 
-        document.getElementById("result").innerText =
-            `【略高买回模式】\n卖出股数: ${sellShares} 股 @${sellPrice.toFixed(2)} 元\n买回股数: ${sellShares} 股 @${buyPrice.toFixed(2)} 元\n本次净收益: ${profit.toFixed(2)} 元\n新成本价: ${newCost.toFixed(3)} 元\n提示: 若股价上涨至 ${buyPrice.toFixed(2)} 元即可完成补回`;
+        const profit = sellNet - buyTotal;
+        const tipEl = document.getElementById("tFeasibility");
+
+        if(profit > 0){
+            tipEl.style.color = "green";
+            tipEl.innerText = `当前条件适合做T，预计净收益 ${profit.toFixed(2)} 元`;
+        } else {
+            tipEl.style.color = "red";
+            tipEl.innerText = `当前条件不适合做T，可能亏损 ${profit.toFixed(2)} 元`;
+        }
     }
 
-    // 补仓计算
-    function calc补仓(){
-        let holdShares = +document.getElementById("holdShares").value;
-        let costPrice = +document.getElementById("costPrice").value;
-        let currentPrice = +document.getElementById("currentPrice").value;
+    function updateSmartBuyPrice(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        let sellShares = toIntegerShares(+document.getElementById("smartSellShares").value);
+        const sellPrice = +document.getElementById("smartSellPrice").value;
 
-        let addShares = holdShares*0.2;
-        let newCost = (costPrice*holdShares + currentPrice*addShares) / (holdShares+addShares);
+        document.getElementById("sellSharesLabel").innerText = sellShares;
+        document.getElementById("sellPriceLabel").innerText = parseFloat(sellPrice).toFixed(2);
 
-        document.getElementById("result").innerText =
-            `【补仓计算】\n补仓股数: ${addShares} 股 @${currentPrice.toFixed(2)} 元\n新成本价: ${newCost.toFixed(3)} 元\n提示: 若股价维持在 ${currentPrice.toFixed(2)} 元补仓，则成本降至 ${newCost.toFixed(3)} 元`;
+        if(!sellShares || !sellPrice){
+            document.getElementById("smartBuyPrice").value = "";
+            return;
+        }
+
+        const sellAmount = sellShares * sellPrice;
+        const sellFee = sellAmount * feeRate;
+        const sellTax = sellAmount * taxRate;
+        const sellNet = sellAmount - sellFee - sellTax;
+
+        const totalCostBefore = holdShares * costPrice;
+        let buyPrice = (totalCostBefore - sellNet)/sellShares;
+        const maxBuyPrice = sellPrice*0.999;
+        if(buyPrice > maxBuyPrice) buyPrice = maxBuyPrice;
+
+        document.getElementById("smartBuyPrice").value = buyPrice.toFixed(3);
+        updateSmartTProfit();
     }
 
-    // 自定义模式
-    function calcCustom(){
-        let holdShares = +document.getElementById("holdShares").value;
-        let costPrice = +document.getElementById("costPrice").value;
-        let currentPrice = +document.getElementById("currentPrice").value;
+    function updateSmartTProfit(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        const sellShares = toIntegerShares(+document.getElementById("smartSellShares").value);
+        const sellPrice = +document.getElementById("smartSellPrice").value;
+        const buyPrice = +document.getElementById("smartBuyPrice").value;
+        const tipEl = document.getElementById("smartTip");
 
-        let sellShares = prompt("请输入卖出股数", Math.floor(holdShares*0.1));
-        let sellPrice = prompt("请输入卖出价格", currentPrice.toFixed(2));
-        let buyPrice = prompt("请输入买入价格", (currentPrice-0.3).toFixed(2));
+        if(!sellShares || !sellPrice || !buyPrice) return;
 
-        sellShares = +sellShares;
-        sellPrice = +sellPrice;
-        buyPrice = +buyPrice;
+        const res = doT(sellShares, sellPrice, buyPrice, holdShares, costPrice);
 
-        let sellIncome = sellPrice*sellShares - calcFee(sellPrice*sellShares,true);
-        let buyCost = buyPrice*sellShares + calcFee(buyPrice*sellShares,false);
-        let profit = sellIncome - buyCost;
-        let newCost = (costPrice*holdShares - profit) / holdShares;
-
-        document.getElementById("result").innerText =
-            `【自定义做T】\n卖出股数: ${sellShares} 股 @${sellPrice.toFixed(2)} 元\n买回股数: ${sellShares} 股 @${buyPrice.toFixed(2)} 元\n本次净收益: ${profit.toFixed(2)} 元\n新成本价: ${newCost.toFixed(3)} 元\n提示: 若股价到 ${buyPrice.toFixed(2)} 元即可完成补回`;
+        if(res.profit < 0){
+            tipEl.style.color = "red";
+            tipEl.innerText = `亏损警告：当前买回价会亏损，净收益 ${res.profit.toFixed(2)} 元`;
+        } else {
+            tipEl.style.color = "green";
+            tipEl.innerText = `收益良好：净收益 ${res.profit.toFixed(2)} 元`;
+        }
     }
+
+    function calcSmartT(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        let sellShares = toIntegerShares(+document.getElementById("smartSellShares").value);
+        const sellPrice = +document.getElementById("smartSellPrice").value;
+        const buyPrice = +document.getElementById("smartBuyPrice").value;
+
+        const res = doT(sellShares, sellPrice, buyPrice, holdShares, costPrice);
+        updateTable("rowCustom", res);
+    }
+
+    function calcPercentT(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        const percent = +document.getElementById("customPercent").value / 100;
+        let sellShares = toIntegerShares(Math.floor(holdShares * percent));
+        const sellPrice = +document.getElementById("percentSellPrice").value;
+        const buyPrice = +document.getElementById("percentBuyPrice").value;
+
+        const res = doT(sellShares, sellPrice, buyPrice, holdShares, costPrice);
+        updateTable("rowPercent", res);
+    }
+
+    function calcMaxProfitT(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        const currentPrice = +document.getElementById("currentPrice").value;
+
+        let bestProfit = -Infinity;
+        let bestRes = null;
+        for(let sShares = 100; sShares <= holdShares; sShares += 100){
+            const sellPrice = currentPrice + 0.15;
+            let buyPrice = (holdShares*costPrice - (sShares*sellPrice*(1-feeRate-taxRate)))/(sShares*(1+feeRate));
+            if(buyPrice > sellPrice) buyPrice = sellPrice*0.999;
+            const res = doT(sShares, sellPrice, buyPrice, holdShares, costPrice);
+            if(res.profit > bestProfit){
+                bestProfit = res.profit;
+                bestRes = res;
+            }
+        }
+        updateTable("rowMaxProfit", bestRes);
+    }
+
+    function updateTable(rowId, res){
+        document.getElementById(rowId).innerHTML = `
+<td>${rowId === "rowAuto" ? "自动最优做T" : rowId==="rowCustom"?"自定义股数做T":rowId==="rowPercent"?"自定义比例做T":"最大净收益做T"}</td>
+<td>${res.sellShares}</td>
+<td>${res.sellPrice.toFixed(2)}</td>
+<td>${res.sellNet.toFixed(2)}</td>
+<td>${res.buyShares}</td>
+<td>${res.buyPrice.toFixed(3)}</td>
+<td>${res.buyTotal.toFixed(2)}</td>
+<td>${res.newCostPrice.toFixed(3)}</td>
+<td>${res.profit.toFixed(2)}</td>
+<td>${res.breakEvenPrice.toFixed(3)}</td>
+`;
+    }
+
+    // 最佳卖出股数范围提示
+    function calcBestSellRange(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const costPrice = +document.getElementById("costPrice").value;
+        const currentPrice = +document.getElementById("currentPrice").value;
+
+        let minSell = 100, maxSell = 0;
+        for(let sShares=100; sShares<=holdShares; sShares+=100){
+            const sellAmount = sShares*currentPrice;
+            const sellFee = sellAmount*feeRate;
+            const sellTax = sellAmount*taxRate;
+            const sellNet = sellAmount - sellFee - sellTax;
+
+            let buyPrice = (holdShares*costPrice - sellNet)/sShares;
+            const buyAmount = sShares*buyPrice;
+            const buyFee = buyAmount*feeRate;
+            const profit = sellNet - (buyAmount + buyFee);
+
+            if(profit > 0){
+                if(minSell===100) minSell = sShares;
+                maxSell = sShares;
+            }
+        }
+
+        if(maxSell===0){
+            document.getElementById("bestRangeTip").innerText = "当前条件下无法做T产生正收益";
+        } else {
+            document.getElementById("bestRangeTip").innerText = `最佳卖出股数范围：${minSell} ~ ${maxSell}`;
+        }
+    }
+
+    function updateAll(){
+        const holdShares = +document.getElementById("holdShares").value;
+        const sellSlider = document.getElementById("smartSellShares");
+        sellSlider.max = holdShares;
+        if(+sellSlider.value > holdShares) sellSlider.value = holdShares;
+
+        updateSmartBuyPrice();
+        checkTFeasibility();
+        calcBestSellRange();
+    }
+
+    updateAll();
 </script>
+
 </body>
 </html>
